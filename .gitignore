@@ -1,0 +1,4 @@
+*.o
+build-emu/
+test_fftmul
+test_fftmul_emu
