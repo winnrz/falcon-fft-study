@@ -454,6 +454,9 @@ own author, and the
 [pqm4](https://github.com/mupq/pqm4) benchmarking project, which carries
 Falcon under its standardised name FN-DSA.
 
+Full citations, the figures relied on, and a snapshot of the pqm4 benchmark
+table as it stood on 23 August 2026 are in [`refs/`](refs/README.md).
+
 ### The methodology matches
 
 | | this study | Pornin 2025 | pqm4 |

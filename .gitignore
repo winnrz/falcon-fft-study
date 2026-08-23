@@ -16,3 +16,7 @@ target/build/
 
 # target results are committed, unlike the host bench.csv
 !bench-m4.csv
+
+# Third-party papers: kept locally, not redistributed. refs/README.md
+# records the citation, the URL and the figures relied on.
+refs/*.pdf
