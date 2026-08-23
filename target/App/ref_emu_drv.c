@@ -6,5 +6,7 @@
 
 #define FALCON_PREFIX  falcon_emu
 #define REF_FN         ref_emu_case
+#define BENCH_FN       bench_emu
 
 #include "refdrv_body.h"
+#include "benchdrv_body.h"

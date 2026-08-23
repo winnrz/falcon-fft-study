@@ -140,6 +140,8 @@ App/ref_native_drv.c \
 App/ref_native_fft.c \
 App/ref_native_fpr.c \
 App/myfft_drv.c \
+App/bench.c \
+App/benchbuf.c \
 ../myfft.c
 
 C_INCLUDES += -IApp -I..

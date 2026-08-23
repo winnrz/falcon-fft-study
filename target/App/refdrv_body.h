@@ -14,18 +14,9 @@
 #include "inner.h"
 #include "refdrv.h"
 #include "cycles.h"
+#include "benchbuf.h"
 
-#define MAX_LOGN   9
-#define MAX_N      (1u << MAX_LOGN)
 #define MARGIN_CAP 60
-
-/*
- * Static, not automatic: 8 KB of fpr does not fit a 1 KB stack, and
- * static placement keeps these buffers away from the allocator so no
- * measurement is charged for one.
- */
-static fpr buf_a[MAX_N];
-static fpr buf_b[MAX_N];
 
 static fpr
 absval(fpr x)
@@ -55,6 +46,10 @@ REF_FN(const struct kat_case *kc, struct ref_result *r)
 {
 	size_t n, u;
 	uint32_t prim, t0, t1;
+	fpr *buf_a, *buf_b;
+
+	buf_a = (fpr *)bench_slot(0);
+	buf_b = (fpr *)bench_slot(1);
 
 	n = (size_t)1 << kc->logn;
 	for (u = 0; u < n; u++) {

@@ -13,3 +13,6 @@ memory-results/
 
 # Cortex-M4 target build products
 target/build/
+
+# target results are committed, unlike the host bench.csv
+!bench-m4.csv

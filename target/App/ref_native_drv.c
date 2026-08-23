@@ -12,5 +12,7 @@
 #define FALCON_PREFIX     falcon_native
 #define FALCON_FPNATIVE   1
 #define REF_FN            ref_native_case
+#define BENCH_FN          bench_native
 
 #include "refdrv_body.h"
+#include "benchdrv_body.h"

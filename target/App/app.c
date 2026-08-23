@@ -33,6 +33,7 @@
 #include "cycles.h"
 #include "verify.h"
 #include "refdrv.h"
+#include "bench.h"
 
 /*
  * Deliberately unoptimisable work.  The volatile forces the loop to
@@ -128,6 +129,7 @@ app_main(void)
 	for (;;) {
 		report();
 		verify_run();
+		bench_run();
 		printf("\r\n");
 		HAL_Delay(5000);
 	}
