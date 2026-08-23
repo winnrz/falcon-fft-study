@@ -1,168 +1,182 @@
 /*
  * verify.c
  *
- * Runs the Falcon reference FFT multiply on the target and compares it
- * against known-answer vectors produced by tools/gen_kat.c.
+ * Runs all three builds of the FFT multiply against known-answer vectors
+ * produced by tools/gen_kat.c, in a single firmware image so that every
+ * number below is taken in one run at one clock setting.
  *
- * This is the check that has to happen before any on-target timing is
- * quoted.  config.h autodetects FALCON_ASM_CORTEXM4 on a Cortex-M4
- * target, which forces the emulated binary64 backend and its
- * hand-written ARM assembly.  That assembly is not the plain-C emulation
- * the host harnesses verified: same intended semantics, different code.
- * Until it reproduces the exact integer products, a cycle count taken
- * from it measures an unknown quantity.
+ *   1  reference on Falcon's emulated binary64, which config.h resolves
+ *      to hand-written ARM assembly on a Cortex-M4.  Constant-time.
+ *   2  reference on the C double type, which the single-precision FPU
+ *      cannot execute, so GCC lowers it to libgcc soft-double calls.
+ *   3  myfft.c, which always uses plain double and so lands on the same
+ *      libgcc routines as build 2.
  *
- * Two things are reported per case:
+ * Builds 2 and 3 share a float backend, so the difference between them
+ * is FFT structure alone.  Builds 1 and 2 share an FFT, so the
+ * difference between them is the price of constant-time arithmetic.
+ * Comparing 1 against 3 conflates the two and is not meaningful.
+ *
+ * Two things are reported per row:
  *
  *   result   whether every rounded coefficient equals the exact integer
- *            the oracle computed.  This is the pass/fail criterion.
+ *            the host oracle computed.  This is the pass/fail criterion.
  *
- *   margin   the worst-case precision headroom, in bits.  Rounding
- *            recovers the exact integer only while a coefficient sits
- *            closer than 0.5 to it, so 0.5 is the cliff.  The margin is
- *            how many times the largest observed deviation could be
- *            doubled before reaching that cliff.  A margin of 30 means
- *            the transform had about 30 bits of precision in hand; a
- *            margin of 1 would mean it passed by luck.  This is the same
- *            question the host harness's T9 asks, expressed in bits so
- *            it prints as a small integer -- newlib-nano's printf
- *            supports neither %f nor %lld, so a scaled fixed-point
- *            deviation cannot be printed here at all.
+ *   margin   precision headroom in bits: how many times the worst
+ *            observed deviation could be doubled before reaching the 0.5
+ *            rounding cliff.  A case can pass on luck with a margin of
+ *            1; the margin says whether it passed comfortably.  Bits
+ *            rather than a scaled deviation because newlib-nano's printf
+ *            supports neither %f nor %lld.
  *
- * The cycle figures are indicative only.  They are single measurements
- * with no calibration and no batching, included because they cost
- * nothing to collect here; the real timings come from the benchmark
- * harness.
+ * The cycle figures are single unbatched measurements, taken here
+ * because they cost nothing to collect.  They are indicative; the
+ * calibrated timings come from the benchmark harness.
  */
 
 #include <stdio.h>
 #include <stdint.h>
 
-#include "inner.h"
 #include "kat.h"
-#include "cycles.h"
+#include "refdrv.h"
 #include "verify.h"
 
-#define MAX_LOGN   9
-#define MAX_N      (1u << MAX_LOGN)
+struct build {
+	const char *name;
+	void      (*run)(const struct kat_case *, struct ref_result *);
+};
 
-/*
- * Static rather than automatic: 8 KB of fpr does not belong on a 1 KB
- * stack, and static placement keeps the buffers out of any allocator so
- * the measurement is not charged for one.
- */
-static fpr fa[MAX_N];
-static fpr fb[MAX_N];
+static const struct build builds[] = {
+	{ "1 ref  emu+asm", ref_emu_case    },
+	{ "2 ref  softdbl", ref_native_case },
+	{ "3 myfft softdbl", myfft_case     },
+};
 
-/* |x|, via the only primitives the fpr backend exposes. */
-static fpr
-fpr_absval(fpr x)
-{
-	return fpr_lt(x, fpr_of(0)) ? fpr_neg(x) : x;
-}
-
-/*
- * Precision headroom in bits: how many doublings separate d from the 0.5
- * rounding cliff.  Capped, since a deviation of exactly zero would
- * otherwise never reach the limit.
- */
-#define MARGIN_CAP  60
-
-static int
-margin_bits(fpr d)
-{
-	fpr half;
-	int bits;
-
-	half = fpr_half(fpr_of(1));
-	if (!fpr_lt(d, half)) {
-		return 0;
-	}
-	for (bits = 0; bits < MARGIN_CAP && fpr_lt(d, half); bits++) {
-		d = fpr_double(d);
-	}
-	return bits;
-}
-
-static int
-run_case(const struct kat_case *kc, unsigned idx)
-{
-	size_t n, u;
-	uint32_t prim, t0, t1, cycles;
-	int worst_margin, m;
-	unsigned bad;
-
-	n = (size_t)1 << kc->logn;
-
-	for (u = 0; u < n; u++) {
-		fa[u] = fpr_of(kc->a[u]);
-		fb[u] = fpr_of(kc->b[u]);
-	}
-
-	prim = cyc_lock();
-	t0 = cyc_read();
-	Zf(FFT)(fa, kc->logn);
-	Zf(FFT)(fb, kc->logn);
-	Zf(poly_mul_fft)(fa, fb, kc->logn);
-	Zf(iFFT)(fa, kc->logn);
-	t1 = cyc_read();
-	cyc_unlock(prim);
-	cycles = t1 - t0;
-
-	bad = 0;
-	worst_margin = MARGIN_CAP;
-	for (u = 0; u < n; u++) {
-		int64_t got;
-
-		got = (int64_t)fpr_rint(fa[u]);
-		if (got != kc->expect[u]) {
-			bad++;
-		}
-
-		/* Worst (smallest) precision headroom over the case. */
-		m = margin_bits(fpr_absval(fpr_sub(fa[u], fpr_of(got))));
-		if (m < worst_margin) {
-			worst_margin = m;
-		}
-	}
-
-	printf("  %4u %5u %6ld  %7s %8d %12lu\r\n",
-		idx, kc->logn, (long)kc->bound,
-		bad ? "FAIL" : "pass",
-		worst_margin, (unsigned long)cycles);
-
-	if (bad) {
-		printf("       %u of %lu coefficients wrong\r\n",
-			bad, (unsigned long)n);
-	}
-	return bad ? 1 : 0;
-}
+#define NBUILDS  ((unsigned)(sizeof builds / sizeof builds[0]))
 
 int
-verify_reference(void)
+verify_run(void)
 {
-	unsigned t;
+	unsigned b, t;
 	int failures;
+	uint32_t ref_cycles[NBUILDS];
+	uint32_t lo[NBUILDS], hi[NBUILDS];
 
-	printf("Reference FFT multiply vs exact integer oracle\r\n");
-	printf("  backend: FALCON_FPEMU=%d  FPNATIVE=%d  ASM_M4=%d\r\n",
-		FALCON_FPEMU, FALCON_FPNATIVE, FALCON_ASM_CORTEXM4);
-	printf("  %4s %5s %6s  %7s %8s %12s\r\n",
-		"case", "logn", "bound", "result", "margin", "cycles");
-	printf("  ---------------------------------------"
-		"----------------------\r\n");
-
-	failures = 0;
-	for (t = 0; t < kat_ncases; t++) {
-		failures += run_case(&kat_cases[t], t);
+	for (b = 0; b < NBUILDS; b++) {
+		ref_cycles[b] = 0;
+		lo[b] = 0xFFFFFFFFu;
+		hi[b] = 0;
 	}
 
-	printf("  ---------------------------------------"
-		"----------------------\r\n");
+	printf("Correctness and cost, all builds, one run\r\n");
+	printf("  %-16s %4s %5s %6s %7s %7s %11s\r\n",
+		"build", "case", "logn", "bound", "result", "margin",
+		"cycles");
+	printf("  --------------------------------------"
+		"---------------------------\r\n");
+
+	failures = 0;
+	for (b = 0; b < NBUILDS; b++) {
+		for (t = 0; t < kat_ncases; t++) {
+			struct ref_result r;
+
+			builds[b].run(&kat_cases[t], &r);
+			if (r.bad) {
+				failures++;
+			}
+
+			/*
+			 * Remember the operating-point case for the
+			 * summary: Falcon-512 size, Falcon-512 operand
+			 * magnitudes.
+			 */
+			if (kat_cases[t].logn == 9
+				&& kat_cases[t].bound == 25
+				&& ref_cycles[b] == 0)
+			{
+				ref_cycles[b] = r.cycles;
+			}
+
+			/*
+			 * Spread across the n=512 cases.  Those cases
+			 * differ only in their operand values, so any
+			 * spread is data-dependent execution time --
+			 * exactly what a constant-time implementation
+			 * must not have.
+			 */
+			if (kat_cases[t].logn == 9) {
+				if (r.cycles < lo[b]) {
+					lo[b] = r.cycles;
+				}
+				if (r.cycles > hi[b]) {
+					hi[b] = r.cycles;
+				}
+			}
+
+			printf("  %-16s %4u %5u %6ld %7s %7d %11lu\r\n",
+				t == 0 ? builds[b].name : "",
+				t, kat_cases[t].logn,
+				(long)kat_cases[t].bound,
+				r.bad ? "FAIL" : "pass",
+				r.margin, (unsigned long)r.cycles);
+		}
+	}
+
+	printf("  --------------------------------------"
+		"---------------------------\r\n");
+
+	/*
+	 * Summary at Falcon-512's operating point.  Ratios are scaled by
+	 * 100 and printed as integers; there is no %f here.
+	 */
+	printf("\r\n  At logn=9, |coeff|<=25 -- n=512 multiply\r\n");
+	for (b = 0; b < NBUILDS; b++) {
+		unsigned long c = (unsigned long)ref_cycles[b];
+		unsigned long pct;
+
+		printf("    %-16s %9lu cycles  %4lu ms",
+			builds[b].name, c, c / 24000UL);
+
+		/* Ratio against build 2, the shared-backend reference. */
+		if (b != 1 && ref_cycles[1] != 0) {
+			pct = c * 100UL / (unsigned long)ref_cycles[1];
+			printf("   %lu.%02lux vs build 2",
+				pct / 100UL, pct % 100UL);
+		}
+		printf("\r\n");
+	}
+
+	printf("\r\n  Meaningful comparisons\r\n");
+	if (ref_cycles[1] != 0) {
+		unsigned long ct, st;
+
+		ct = (unsigned long)ref_cycles[0] * 100UL
+			/ (unsigned long)ref_cycles[1];
+		st = (unsigned long)ref_cycles[2] * 100UL
+			/ (unsigned long)ref_cycles[1];
+		printf("    1 vs 2  same FFT, different backend"
+			"    %lu.%02lux  price of constant-time\r\n",
+			ct / 100UL, ct % 100UL);
+		printf("    3 vs 2  same backend, different FFT"
+			"    %lu.%02lux  cost of my structure\r\n",
+			st / 100UL, st % 100UL);
+	}
+
+	printf("\r\n  Execution-time spread over the n=512 cases\r\n");
+	printf("    (same size, different operand values)\r\n");
+	for (b = 0; b < NBUILDS; b++) {
+		printf("    %-16s %9lu cycles  %s\r\n",
+			builds[b].name,
+			(unsigned long)(hi[b] - lo[b]),
+			hi[b] == lo[b] ? "data-independent"
+				: "VARIES with data");
+	}
+
 	if (failures) {
-		printf("  %d case(s) FAILED\r\n", failures);
+		printf("\r\n  %d case(s) FAILED\r\n", failures);
 	} else {
-		printf("  all %u cases pass\r\n", kat_ncases);
+		printf("\r\n  all %u checks pass\r\n",
+			NBUILDS * kat_ncases);
 	}
 	return failures;
 }

@@ -160,6 +160,31 @@ regenerates:
 | `cycles.[ch]` | DWT `CYCCNT` timing, plus `cyc_lock`/`cyc_unlock` to mask interrupts across a measured region |
 | `console.c` | `__io_putchar` retarget so `printf` reaches USART2 |
 | `app.[ch]` | `app_main()`, called from `main()`'s USER CODE 2 marker |
+| `kat.[ch]` | **generated** by `tools/gen_kat.c` — do not edit |
+| `ref_{emu,native}_{fft,fpr}.c` | four-line wrappers instantiating the unmodified reference under distinct `FALCON_PREFIX` values |
+| `refdrv_body.h` | shared driver implementation, included once per backend |
+| `ref_{emu,native}_drv.c` | backend selection + `REF_FN` name |
+| `myfft_drv.c` | build 3 driver |
+| `verify.[ch]` | runs every build against every KAT case |
+
+**All three builds live in one firmware image.** `inner.h` documents
+`FALCON_PREFIX` as existing so several versions can coexist in one
+application, and there are no non-`Zf()` globals to collide. Each backend
+needs its own driver TU because `fpr` is a different type under each
+(`uint64_t` vs a struct), so one TU cannot call both. The backend is chosen
+by `#define` inside the wrapper `.c` files rather than by compiler flag,
+because the CubeMX Makefile compiles every source with identical flags.
+
+`tools/gen_kat.c` regenerates the vectors:
+
+```
+clang -O2 -o gen_kat tools/gen_kat.c
+./gen_kat target/App/kat.c target/App/kat.h
+```
+
+The linker script's `_Min_Heap_Size` is raised from the generated `0x200` to
+`0x4000` for `myfft.c`'s twiddle tables. Like the Makefile, the linker script
+is CubeMX-generated and this change must be re-applied after regeneration.
 
 `target/Makefile` carries a block marked **"study additions -- RE-APPLY AFTER
 ANY CubeMX REGENERATION"**. CubeMX rewrites the Makefile wholesale, so that

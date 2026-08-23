@@ -1,11 +1,11 @@
 /*
- * verify.h -- on-target correctness check for the Falcon reference FFT.
+ * verify.h -- on-target correctness and cost for all three builds.
  */
 
 #ifndef VERIFY_H__
 #define VERIFY_H__
 
-/* Runs every KAT case, prints a table.  Returns 0 if all passed. */
-int verify_reference(void);
+/* Runs every build against every KAT case.  Returns 0 if all passed. */
+int verify_run(void);
 
 #endif

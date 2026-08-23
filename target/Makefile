@@ -133,8 +133,14 @@ App/cycles.c \
 App/console.c \
 App/verify.c \
 App/kat.c \
-../fft.c \
-../fpr.c
+App/ref_emu_drv.c \
+App/ref_emu_fft.c \
+App/ref_emu_fpr.c \
+App/ref_native_drv.c \
+App/ref_native_fft.c \
+App/ref_native_fpr.c \
+App/myfft_drv.c \
+../myfft.c
 
 C_INCLUDES += -IApp -I..
 

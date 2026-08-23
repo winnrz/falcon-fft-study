@@ -32,6 +32,7 @@
 #include "app.h"
 #include "cycles.h"
 #include "verify.h"
+#include "refdrv.h"
 
 /*
  * Deliberately unoptimisable work.  The volatile forces the loop to
@@ -111,13 +112,22 @@ app_main(void)
 	cyc_init();
 
 	/*
+	 * myfft.c builds its twiddle tables on first use.  Doing it here
+	 * keeps table construction, and its malloc, out of every timed
+	 * region.
+	 */
+	if (!myfft_prepare()) {
+		printf("myfft_prepare failed -- heap too small?\r\n");
+	}
+
+	/*
 	 * Repeated rather than printed once, so the report can be read
 	 * by attaching to the port at any time without having to catch
 	 * the boot.
 	 */
 	for (;;) {
 		report();
-		verify_reference();
+		verify_run();
 		printf("\r\n");
 		HAL_Delay(5000);
 	}
