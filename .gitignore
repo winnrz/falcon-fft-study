@@ -2,3 +2,8 @@
 build-emu/
 test_fftmul
 test_fftmul_emu
+test_myfft
+test_myfft_emu
+bench_fftmul
+bench.csv
+memory-results/

@@ -14,6 +14,12 @@ via an FFT, multiplies pointwise, and transforms back — `O(N log N)`.
 This repository isolates that operation for study along three axes:
 **correctness**, **numerical stability**, and **computational performance**.
 
+It contains two implementations. The Falcon reference, extracted verbatim, is
+the object of study and the comparison target. Alongside it sits an
+independent implementation written from scratch for this project, verified
+against the same oracle and cross-checked against the reference value by
+value. Performance and memory are measured for both.
+
 ## Files
 
 Extracted verbatim from the Falcon reference implementation (round 3,
@@ -31,8 +37,12 @@ Written for this study:
 
 | File | Role |
 |---|---|
-| `test_fftmul.c` | Verification harness (this document's subject) |
-| `Makefile` | Builds and runs the harness under both FP backends |
+| `test_fftmul.c` | Verification harness for the reference |
+| `myfft.c`, `myfft.h` | The from-scratch implementation |
+| `test_myfft.c` | Verification harness for it, plus the reference cross-check |
+| `bench_fftmul.c` | Performance measurement, both implementations |
+| `measure_memory.sh` | Peak RSS, heap profile, leak check |
+| `Makefile` | Builds and runs everything |
 
 `fft.c` depends on `fpr.c` only for two constant tables
 (`fpr_gm_tab`, `fpr_p2_tab`); `fpr.c` is fully self-contained. Nothing else
@@ -41,12 +51,18 @@ from the reference implementation is required.
 ## Build and run
 
 ```sh
-make test         # hardware binary64 backend
-make test-both    # run under both hardware and software binary64
+make test         # verify the reference
+make test-mine    # verify the from-scratch code, cross-check vs reference
+make test-all     # both verification harnesses
+make test-both    # the reference under both floating-point backends
+make bench        # performance
+make bench-csv    # same, as bench.csv for plotting
+make memory       # peak RSS, heap profile, leak check
 make clean
 ```
 
-Exit status is 0 if every check passes, 1 otherwise.
+Exit status of the verification harnesses is 0 if every check passes,
+1 otherwise.
 
 ## What the harness verifies
 
@@ -147,11 +163,182 @@ Falcon-512 operates with at least five orders of magnitude of headroom in the
 worst case, so double-precision FFT multiplication is comfortably exact for
 this parameter set.
 
+## The from-scratch implementation
+
+`myfft.c` implements the same operation independently. It shares no code with
+`fft.c`: it uses the plain C `double` type rather than the reference's `fpr`
+abstraction, and it generates its own twiddle factors from `cos`/`sin` rather
+than reading `fpr_gm_tab`.
+
+### Derivation
+
+Evaluating at the `N` roots of `X^N+1` is not a cyclic DFT, so the transform
+is obtained by twisting it into one. Writing `hn = N/2`,
+
+```
+x_t   = exp(i(4t+1)π/N) = ζ · ω^t      ζ = exp(iπ/N), ω = exp(2πi/hn)
+```
+
+and splitting the coefficient sum over `u = v` and `u = v + hn`, with
+`ζ^hn = i`,
+
+```
+A(x_t) = Σ_v  ζ^v · (a[v] + i·a[v+hn]) · ω^(tv)
+```
+
+which is an ordinary length-`hn` cyclic DFT of the twisted sequence
+`c[v] = ζ^v · (a[v] + i·a[v+hn])`. So: fold `N` real coefficients into `hn`
+complex ones, run one complex DFT of half the length, and every evaluation
+needed is in hand. Conjugate symmetry is what makes the halving legitimate —
+the roots with even index contain exactly one member of each conjugate pair.
+
+### Matching the reference layout
+
+The DFT is a decimation-in-frequency radix-2 loop with the final bit-reversal
+permutation deliberately omitted. DIF on natural-order input leaves the output
+in bit-reversed order, which is precisely the reference's layout:
+
+```
+slot j  holds  A(x_t)   with  t = rev(j) over logn-1 bits
+```
+
+This falls out of the construction rather than being imposed on it, which is
+the useful part: the reference's ordering is not arbitrary, it is what a
+standard DIF transform produces.
+
+### Verification
+
+`make test-mine` runs the same ten property groups as the reference harness,
+with the same seeds and coefficient ranges, and adds **T11**, a direct
+cross-check against the official reference at every size:
+
+| logn = 9 comparison | max abs difference |
+|---|---|
+| forward transform, slot by slot | 1.18e-11 |
+| inverse, completing the round trip | 5.12e-13 |
+| finished product, coefficient by coefficient | 5.59e-09 |
+
+113 checks, 0 failures. The forward comparison is the one that constrains slot
+ordering — a permuted layout would still pass the product comparison.
+
+Accuracy is close to the reference but not identical, being consistently
+around 1.5× worse:
+
+| operand pair | reference | from scratch |
+|---|---|---|
+| `f * g` | 8.19e-12 | 1.43e-11 |
+| `f * F` | 3.73e-09 | 5.82e-09 |
+| `F * G` | 1.91e-06 | 2.86e-06 |
+
+Both break at the same place in the T9 sweep (`B = 10⁷`), so the exactness
+boundary is a property of the approach rather than of either implementation.
+
+### A finding: contraction breaks commutativity
+
+T5 checks `a*b == b*a` bit-exactly. The from-scratch code failed it at every
+`logn > 1` until floating-point contraction was disabled.
+
+The complex product's imaginary part is `ar·bi + ai·br`. With contraction
+enabled the compiler fuses this into `fma(ar, bi, ai·br)`, which keeps
+`ar·bi` exact and rounds `ai·br`. Exchanging the operands keeps the *other*
+product exact, so the two orderings can differ in the last bit.
+
+The reference does not have this problem because `inner.h` disables
+contraction explicitly, noting that reproducibility requires it. `myfft.c`
+does not include `inner.h` and so had to repeat the treatment. The lesson
+generalises: an FFT that must produce reproducible values cannot be compiled
+under default floating-point rules.
+
+## Performance
+
+`make bench`. Each operation is calibrated to run at least 20 ms per batch and
+timed over 7 batches with the minimum taken. Buffers are restored by `memcpy`
+before each destructive operation, and the cost of that restore is measured
+separately and subtracted.
+
+### Per-operation cost at `n = 512` (nanoseconds)
+
+| | forward | inverse | pointwise |
+|---|---|---|---|
+| from scratch | 1478 | 1644 | 95.3 |
+| reference | 1501 | 1002 | 94.0 |
+
+The forward transforms and the pointwise product are level. The entire
+difference between the two implementations is in the inverse transform, where
+the reference is about 1.6× faster — it elides work in the final stages that
+the straightforward DIT loop does not.
+
+### Complete integer multiply
+
+| n | from scratch | reference | ratio | schoolbook | speedup |
+|---|---|---|---|---|---|
+| 8 | 81 | 43 | 1.91 | 53 | 0.7× |
+| 16 | 152 | 99 | 1.54 | 199 | 1.3× |
+| 64 | 503 | 374 | 1.34 | 3 985 | 7.9× |
+| 512 | 4 714 | 4 095 | 1.15 | 224 188 | 47.6× |
+| 1024 | 9 955 | 9 109 | 1.09 | 880 188 | 88.4× |
+
+Two things worth reading off this. The from-scratch implementation closes on
+the reference as `n` grows, from 1.9× slower at `n = 8` to 1.09× at
+`n = 1024`, because the fixed per-call overhead amortises. And the FFT does
+not pay for itself until `n = 16` — below that the exact `O(N²)` schoolbook is
+simply faster, which is why the asymptotic argument needs the constant factors
+attached before it means anything.
+
+### Scaling
+
+Normalised cost, ns per `n·log₂n` for the FFT and per `n²` for the schoolbook:
+
+| n | from scratch | reference | schoolbook |
+|---|---|---|---|
+| 32 | 1.619 | 1.102 | 1.025 |
+| 128 | 1.154 | 0.923 | 0.951 |
+| 512 | 1.023 | 0.889 | 0.855 |
+| 1024 | 0.972 | 0.890 | 0.839 |
+
+Both columns flatten, which is the empirical confirmation that the
+implementations really are `O(N log N)` and `O(N²)` respectively. The
+residual downward drift is fixed overhead amortising, not a change in
+complexity class.
+
+## Memory
+
+`make memory` measures peak RSS, and on Linux also runs a `massif` heap
+profile and a `memcheck` leak check. `make bench` prints the static
+accounting, which is the figure that actually characterises the algorithm:
+
+| | bytes |
+|---|---|
+| transform working buffer, either implementation (`n = 512`) | 4 096 |
+| from-scratch twiddle tables, `logn = 9` | 6 144 |
+| from-scratch twiddle tables, all sizes 1–10 | 24 560 |
+| reference static tables (`fpr_gm_tab` + `fpr_p2_tab`) | 16 472 |
+
+**Neither transform allocates.** Both work in place on caller-provided
+buffers; `fft.c` contains no `malloc`, no `calloc`, and no stack arrays. The
+working set for a Falcon-512 multiply is therefore two 4 KB operand buffers
+plus a constant table, which is what makes the scheme viable on embedded
+targets. Process peak RSS (1.4–1.7 MB across the three harnesses) is
+dominated by the C runtime and the harnesses' own test buffers, and says
+nothing useful about the transform — it is reported only to confirm the
+absence of unexpected growth.
+
 ## Platform note
 
-Built and verified on arm64 (Apple silicon), where `FALCON_AVX2` is
+Built and verified on arm64 (Apple silicon) with clang, where `FALCON_AVX2` is
 necessarily disabled — the scalar code paths in `fft.c` are what execute.
-On x86-64 the AVX2 branches activate and should be re-verified separately.
+On x86-64 the AVX2 branches activate and should be re-verified separately;
+the reference would be expected to gain more from that than the from-scratch
+code, so the performance ratios above are the arm64 figures and not
+transferable.
+
+Three things need re-running on x86-64 Ubuntu with GCC before the numbers
+here can be quoted as final:
+
+- the verification harnesses, to exercise the AVX2 paths in `fft.c`
+- the benchmark, since every timing above is arm64 scalar
+- `make memory`, whose `massif` and `memcheck` stages need a working
+  valgrind and so are skipped on Apple silicon
 
 ## License
 
