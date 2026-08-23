@@ -31,6 +31,7 @@
 #include "main.h"
 #include "app.h"
 #include "cycles.h"
+#include "verify.h"
 
 /*
  * Deliberately unoptimisable work.  The volatile forces the loop to
@@ -116,6 +117,8 @@ app_main(void)
 	 */
 	for (;;) {
 		report();
-		HAL_Delay(3000);
+		verify_reference();
+		printf("\r\n");
+		HAL_Delay(5000);
 	}
 }

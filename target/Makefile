@@ -130,9 +130,13 @@ C_INCLUDES =  \
 C_SOURCES += \
 App/app.c \
 App/cycles.c \
-App/console.c
+App/console.c \
+App/verify.c \
+App/kat.c \
+../fft.c \
+../fpr.c
 
-C_INCLUDES += -IApp
+C_INCLUDES += -IApp -I..
 
 
 # compile gcc flags
