@@ -445,6 +445,111 @@ The point that does transfer: **the FFT does not pay for itself until
 why the asymptotic argument needs its constant factors attached before it
 means anything. The schoolbook was not re-measured on target.
 
+## Comparison with published work
+
+Two sources report Falcon on Cortex-M4 in enough detail to set these figures
+against: Thomas Pornin's *Falcon on ARM Cortex-M4: an Update*
+([eprint 2025/123](https://eprint.iacr.org/2025/123.pdf)), by the algorithm's
+own author, and the
+[pqm4](https://github.com/mupq/pqm4) benchmarking project, which carries
+Falcon under its standardised name FN-DSA.
+
+### The methodology matches
+
+| | this study | Pornin 2025 | pqm4 |
+|---|---|---|---|
+| board | Nucleo-F411RE | STM32F407G-DISC1 | Nucleo-L4R5ZI |
+| clock | 24 MHz | 24 MHz | 24 MHz |
+| unit | cycles | cycles | cycles |
+| compiler | GCC 15.3, `-O3` | GCC 13.2, `-O2` | GCC |
+
+The 24 MHz choice made here to eliminate flash wait states turns out to be the
+established convention. Pornin measures "at 24 MHz speed, as is customary in
+the literature… at that relatively low frequency (the board can be used at up
+to 168 MHz), caches can be disabled because RAM and ROM (Flash) accesses
+normally complete with minimal latency". pqm4 gives the same reason: "All
+cycle counts were obtained at 24MHz to avoid wait cycles due to the speed of
+the memory controller." The boards differ, so the memory subsystems differ,
+but the figures are comparable in the way this literature treats them.
+
+### What the published figures measure is not what this study measures
+
+This is the caveat that governs everything below. Both sources report **whole
+scheme operations** — key generation, signing, verification. This study
+measures **one primitive**, a single `n = 512` polynomial multiply. The
+numbers cannot be equated, only placed in context.
+
+Falcon-512, cycles at 24 MHz:
+
+| | keygen | sign | verify |
+|---|---|---|---|
+| Pornin 2025 | 71 943 764 | 22 008 433 | 255 306 (orig) / 358 517 (BUFF) |
+| pqm4 `m4f`, min | 57 825 106 | 22 280 159 | 390 368 |
+| pqm4 `ref`, min | 64 822 516 | 49 325 465 | 714 301 |
+
+The two optimised signing figures agree closely — 22.0 M against 22.3 M —
+across different boards, which is a useful check on the comparability of the
+convention. The gap between pqm4's `ref` and `m4f` signing, 49.3 M against
+22.3 M, is the 2.2× that hand optimisation buys, consistent with Pornin's
+report that the current code is "about twice faster than the 2019 code".
+
+Against that, the complete `n = 512` multiply measured here at
+**3 920 995 cycles** is roughly **18% of an optimised Falcon-512 signature**,
+or 8% of the reference implementation's. That is the honest way to place it:
+one polynomial multiply is a substantial minority of a signature, and signing
+performs several along with Gaussian sampling and the LDL tree.
+
+One further scoping point: Falcon **verification does not use this FFT at
+all.** Pornin's verify path uses an integer NTT modulo *q*, with 4 096 bytes
+of NTT tables. The floating-point FFT studied here is used in key generation
+and signing.
+
+### Independent support for the addition-versus-multiplication finding
+
+The claim above — that eliding operations stops paying once binary64 is
+emulated, because software addition must align exponents and renormalise — is
+corroborated by Pornin's own profile of where signing spends its time
+(Figure 2, Falcon-512):
+
+| operation | share of signature generation |
+|---|---|
+| `fpr_add` | 22.78% |
+| `fpr_mul` | 21.81% |
+| `fpr_add_sub` | 14.89% |
+| `fpr_div` | 4.79% |
+| `fpr_scaled` | 1.85% |
+| `fpr_sqrt` | 1.42% |
+| Keccak-f (SHAKE) | 10.67% |
+
+Floating-point arithmetic is **about 67% of a Falcon-512 signature** on this
+platform, which is the strongest available justification for studying it in
+isolation. And the addition family, `fpr_add` plus `fpr_add_sub` at 37.7%
+combined, costs considerably more in aggregate than `fpr_mul` at 21.8%. These
+are aggregate shares rather than per-call costs, so they do not prove the
+mechanism, but they are consistent with it and inconsistent with the
+assumption that a saved multiplication is worth more than an added addition.
+
+### On the single-precision question
+
+The precision headroom measured above — 37 bits at Falcon-512's operating
+point, against roughly 29 that `float` would cost — invites the question of
+whether the idle single-precision FPU could take over.
+
+For Falcon as a whole, the algorithm's author has already answered it. Pornin
+states plainly that the FPU "is not directly usable for Falcon signature
+generation, since it supports only 32-bit precision (IEEE 754 type
+binary32)", and uses the floating-point registers only as fast-access
+storage.
+
+That does not contradict the margin measured here, because the two concern
+different operations. The 37 bits is headroom in the **polynomial multiply**.
+Falcon's precision-critical work is elsewhere — the Gaussian sampling and the
+LDL tree in signing — and nothing in this study measures those. The open
+question is therefore the narrow one: whether single precision could serve for
+the polynomial multiply alone, inside an implementation that keeps binary64
+where the algorithm actually demands it. The broad version is settled, and
+should not be presented as open.
+
 ## Memory
 
 `make memory` measures peak RSS, and on Linux also runs a `massif` heap
