@@ -84,8 +84,8 @@ default is the opposite. Consequences:
   it are byte-identical. The `emu` Makefile target's model inverts here.
 - The on-target reference path is emulated binary64 **in hand-written M4
   assembly**, which is *not* the plain-C emulation verified bit-exact on the
-  host. It must pass T1–T10 on target in its own right before any timing
-  taken from it is quoted.
+  host. It has since been checked in its own right against the exact integer
+  oracle on target and passes; see `target/App/verify.c`.
 
 ### The three-build matrix
 
@@ -123,17 +123,57 @@ Quoting 1 against 3 conflates the two effects. Don't.
   measure-and-subtract the input-restore `memcpy` rather than assuming it is
   negligible.
 
-### Porting obstacles
+### Porting obstacles, and how they were handled
 
-- `__int128` does not exist on 32-bit ARM. The exact schoolbook oracle (T8)
-  cannot cross-compile as written — either implement it on 64×64→128 helpers
-  or keep T8 host-side and flash only the properties that fit.
-- `myfft.c` calls `malloc` for twiddle tables (`my_fft_init`) and for
-  per-call scratch inside `my_poly_mul` (`myfft.c:430`). On target, prefer
-  precomputing the twiddles on the host and emitting them as
-  `static const double[]` so they live in flash rather than SRAM — this also
-  drops the `cos`/`sin` calls and the double-precision libm they pull in.
-  The per-call scratch `malloc` sits inside the timed path and must go.
+- **`__int128` does not exist on 32-bit ARM**, so the exact schoolbook oracle
+  cannot cross-compile. Reimplementing 128-bit arithmetic on target would put
+  new, unverified code exactly where the trust is meant to come from, so the
+  oracle stays on the host: `tools/gen_kat.c` runs it and freezes the results
+  into `target/App/kat.c`. The oracle is unchanged in strength; only where it
+  runs moved.
+- **`myfft.c` allocates.** `my_fft_init` mallocs twiddle tables and
+  `my_poly_mul` mallocs scratch on every call (`myfft.c:430`). Handled by
+  raising `_Min_Heap_Size` and calling `myfft_prepare()` at startup so table
+  construction sits outside every timed region, and by driving the transform
+  steps directly instead of calling `my_poly_mul`, exactly as
+  `bench_fftmul.c` does on the host. Still worth doing eventually:
+  precomputing the twiddles on the host as `static const double[]` would move
+  them from SRAM to flash and drop the `cos`/`sin` calls with their
+  double-precision libm.
+- **newlib-nano's `printf` supports neither `%f` nor `%lld`.** Anything the
+  firmware reports must be expressible as a 32-bit integer. This is why the
+  precision margin is reported in bits rather than as a scaled deviation.
+
+## Current state
+
+The port is working and all three builds are verified on hardware. At
+Falcon-512's operating point (`logn = 9`, `|coeff| <= 25`, n = 512 multiply):
+
+| build | cycles | vs build 2 | time spread over cases |
+|---|---|---|---|
+| 1 reference, FPEMU + M4 asm | 3 920 996 | 1.35x | **0 cycles** |
+| 2 reference, libgcc soft-double | 2 890 743 | — | 8 725 cycles |
+| 3 `myfft.c`, libgcc soft-double | 3 142 004 | 1.08x | 8 858 cycles |
+
+Constant-time arithmetic costs 1.35x; the from-scratch FFT is 8% behind the
+reference on identical float routines. The spread column measures the
+constant-time property directly — those cases differ only in operand values.
+
+Precision headroom is 37 bits for the reference at the operating point and
+36 for `myfft.c`. The 1-bit gap is consistent across sizes, so it is
+systematic; a likely cause is `myfft.c` generating twiddles from `cos`/`sin`
+at runtime where the reference reads `fpr_gm_tab`.
+
+Outstanding:
+
+- Port `bench_fftmul.c`'s calibrate-and-take-minimum method to target. The
+  cycle figures above are single unbatched measurements, adequate for
+  ranking but not for quoting.
+- The single-precision question: 37 bits of margin against roughly 29 bits
+  that `float` would cost. Suggestive, needs measuring rather than
+  extrapolating.
+- `README.md`'s "Platform note" still describes x86-64 Ubuntu re-runs as
+  outstanding work and predates the pivot.
 
 ## The `target/` project
 
