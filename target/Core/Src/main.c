@@ -23,6 +23,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app.h"
+
 
 /* USER CODE END Includes */
 
@@ -89,6 +91,8 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  app_main();   /* does not return */
+
 
   /* USER CODE END 2 */
 

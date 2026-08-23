@@ -152,14 +152,25 @@ builds without CubeMX installed.
 cd target && make          # -> build/target.elf, .hex, .bin
 ```
 
-Two changes are still outstanding before any measurement is recorded:
+The study's own code lives in `target/App/`, outside the directories CubeMX
+regenerates:
 
-- `OPT = -Og` in `target/Makefile` must become **`-O3`**. The host benchmarks
-  are all `-O3`; timing `-Og` code against them is meaningless.
-- The link uses `-specs=nano.specs`, and newlib-nano's `printf` drops
-  floating-point conversions unless `-u _printf_float` is added to `LDFLAGS`.
-  Irrelevant for integer cycle counts, needed as soon as the verification
-  harness prints error magnitudes.
+| file | role |
+|---|---|
+| `cycles.[ch]` | DWT `CYCCNT` timing, plus `cyc_lock`/`cyc_unlock` to mask interrupts across a measured region |
+| `console.c` | `__io_putchar` retarget so `printf` reaches USART2 |
+| `app.[ch]` | `app_main()`, called from `main()`'s USER CODE 2 marker |
+
+`target/Makefile` carries a block marked **"study additions -- RE-APPLY AFTER
+ANY CubeMX REGENERATION"**. CubeMX rewrites the Makefile wholesale, so that
+block and the `OPT` setting must be restored by hand after any regeneration.
+`OPT` is already switched from the generated `-Og` to **`-O3`**, to match the
+host benchmarks.
+
+Still outstanding: the link uses `-specs=nano.specs`, and newlib-nano's
+`printf` drops floating-point conversions unless `-u _printf_float` is added
+to `LDFLAGS`. Irrelevant for integer cycle counts, needed as soon as a harness
+prints error magnitudes.
 
 ## Hardware
 
@@ -183,6 +194,19 @@ st-flash --connect-under-reset --reset write build/target.bin 0x8000000
 `Failed to read core_id` even though `st-info --probe` reads the chip fine.
 Note also that a running STM32CubeIDE can hold the probe; close it if
 connection problems persist.
+
+Reading the board's output does not need a terminal emulator; set the line
+discipline and read the character device directly (115200 8N1). The bring-up
+firmware repeats its report every 3 s so the port can be attached at any time
+without having to catch the boot.
+
+### Verified on target
+
+The DWT counter was validated before any FFT code was flashed: measurement
+overhead 1 cycle, `busy(2n)/busy(n)` = 1.999, and `HAL_Delay(100)` measured at
+~2.405 Mcycles. That last figure reads ~0.3% above 24 MHz because `HAL_Delay`
+adds a tick of margin and starts mid-tick, so it waits 100-101 ms; the result
+is consistent with the clock being exactly 24.000 MHz.
 
 ## Stale documentation
 

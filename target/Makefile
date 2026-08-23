@@ -22,7 +22,7 @@ TARGET = target
 # debug build?
 DEBUG = 1
 # optimization
-OPT = -Og
+OPT = -O3
 
 
 #######################################
@@ -123,6 +123,16 @@ C_INCLUDES =  \
 -IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32F4xx/Include \
 -IDrivers/CMSIS/Include
+
+#######################################
+# study additions -- RE-APPLY AFTER ANY CubeMX REGENERATION
+#######################################
+C_SOURCES += \
+App/app.c \
+App/cycles.c \
+App/console.c
+
+C_INCLUDES += -IApp
 
 
 # compile gcc flags
