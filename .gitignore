@@ -7,3 +7,9 @@ test_myfft_emu
 bench_fftmul
 bench.csv
 memory-results/
+
+# macOS
+.DS_Store
+
+# Cortex-M4 target build products
+target/build/
