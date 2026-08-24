@@ -5,7 +5,6 @@ test_fftmul_emu
 test_myfft
 test_myfft_emu
 bench_fftmul
-bench.csv
 memory-results/
 
 # macOS
@@ -13,9 +12,6 @@ memory-results/
 
 # Cortex-M4 target build products
 target/build/
-
-# target results are committed, unlike the host bench.csv
-!bench-m4.csv
 
 # Third-party papers: kept locally, not redistributed. refs/README.md
 # records the citation, the URL and the figures relied on.

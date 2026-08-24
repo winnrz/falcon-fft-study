@@ -93,7 +93,7 @@ clean:
 		test_fftmul test_fftmul.o test_fftmul_emu \
 		test_myfft test_myfft.o test_myfft_emu \
 		bench_fftmul bench_fftmul.o \
-		bench.csv memory-results build-emu
+		memory-results build-emu
 
 # --- objects ---------------------------------------------------------
 

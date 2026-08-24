@@ -29,6 +29,38 @@ M4F's FPU is single precision only, so the binary64 arithmetic Falcon's FFT
 requires has no hardware behind it and is emulated. That turns out to change
 not just the magnitude of the costs but their ordering.
 
+## Headline results
+
+At Falcon-512's operating point — `n = 512`, coefficients within ±25 — on a
+Nucleo-F411RE at 24 MHz, measured in cycles with the DWT counter:
+
+| build | cycles | vs build 2 | spread over operand values |
+|---|---|---|---|
+| 1 reference, Falcon's emulated binary64 in M4 assembly | 3 920 995 | 1.36× | **0** |
+| 2 reference, libgcc soft-double | 2 890 054 | — | 8 727 |
+| 3 from scratch, libgcc soft-double | 3 101 545 | 1.07× | 9 443 |
+
+- **Constant-time arithmetic costs 1.36×.** Build 1 against build 2 isolates
+  it: same FFT, different backend.
+- **The from-scratch FFT is 7% behind the reference** on identical
+  floating-point routines. Builds 2 and 3 isolate that: same backend,
+  different FFT.
+- **The constant-time property is measured, not asserted.** The spread column
+  is execution-time variation across cases that differ only in operand
+  values. Build 1 does not vary at all; the other two do.
+- **Precision headroom is 37 bits** at the operating point — the worst
+  observed deviation could double 37 times before exact integer recovery
+  would fail.
+- All three builds are verified on hardware against exact integer vectors
+  produced by a `__int128` schoolbook oracle.
+
+A finding worth flagging early: measured on a desktop, the reference's
+inverse transform is markedly cheaper than its forward transform, and that is
+where its whole advantage lies. Under emulation that advantage
+[disappears](#the-references-inverse-transform-advantage-does-not-survive-emulation).
+A study run only on a desktop would have drawn the opposite conclusion about
+the code that Falcon actually ships to embedded targets.
+
 ## Files
 
 Extracted verbatim from the Falcon reference implementation (round 3,
@@ -54,7 +86,8 @@ Written for this study:
 | `Makefile` | Builds and runs everything on the host |
 | `target/` | The Cortex-M4 firmware: CubeMX project plus `target/App` |
 | `tools/gen_kat.c` | Generates the target's known-answer vectors |
-| `bench-m4.csv` | Target timings, the cycle figures quoted below |
+| `docs/BUILDING.md` | Toolchain, target project, and reproduction notes |
+| `bench.csv`, `bench-m4.csv` | Host and target timings |
 | `verify-m4.csv` | Target correctness and precision margins, all three builds |
 
 `fft.c` depends on `fpr.c` only for two constant tables
@@ -75,7 +108,9 @@ make clean
 ```
 
 Exit status of the verification harnesses is 0 if every check passes,
-1 otherwise.
+1 otherwise. [`docs/BUILDING.md`](docs/BUILDING.md) covers the toolchain, the
+target project layout, regenerating the known-answer vectors, and the edits
+that must be re-applied after regenerating from CubeMX.
 
 On the target, one firmware image contains all three builds and runs the
 verification and the benchmark in sequence, reporting over the ST-Link's
@@ -523,11 +558,11 @@ Complete integer multiply, including the exact schoolbook for reference:
 
 | n | from scratch | reference | ratio | schoolbook | speedup |
 |---|---|---|---|---|---|
-| 8 | 83 | 43 | 1.93 | 53 | 0.6× |
-| 16 | 155 | 98 | 1.58 | 199 | 1.3× |
-| 64 | 502 | 366 | 1.37 | 3 953 | 7.9× |
-| 512 | 4 730 | 3 776 | 1.25 | 224 039 | 47.4× |
-| 1024 | 9 964 | 8 340 | 1.19 | 880 688 | 88.4× |
+| 8 | 81 | 43 | 1.89 | 53 | 0.7× |
+| 16 | 154 | 98 | 1.57 | 200 | 1.3× |
+| 64 | 502 | 366 | 1.37 | 3 944 | 7.9× |
+| 512 | 4 728 | 3 783 | 1.25 | 224 688 | 47.5× |
+| 1024 | 9 902 | 8 340 | 1.19 | 879 062 | 88.8× |
 
 These were re-measured after the twiddle change described above; the
 from-scratch timings moved by less than 0.5%, since table construction happens
@@ -705,6 +740,6 @@ either platform, so nothing here says anything about x86-64 performance.
 
 ## License
 
-The extracted Falcon sources retain their original MIT license; see the
-header of each file. Material written for this study is offered under the
-same terms.
+Material written for this study is MIT licensed. The vendored Falcon sources
+and the STMicroelectronics HAL retain their own terms. See
+[`LICENSE`](LICENSE) for the details of each.

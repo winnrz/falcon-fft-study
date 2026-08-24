@@ -1,0 +1,45 @@
+MIT License
+
+Copyright (c) 2026 Nana Kwasi Boadi
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+THIRD-PARTY COMPONENTS
+======================
+
+This repository vendors code from two external projects, each retaining
+its own licence.
+
+Falcon reference implementation
+-------------------------------
+`fft.c`, `fpr.c`, `fpr.h`, `inner.h` and `config.h` are taken unmodified
+from the Falcon reference implementation, Copyright (c) 2017-2019 Falcon
+Project, author Thomas Pornin. They are distributed under the MIT licence
+reproduced in the header of each file.
+
+STMicroelectronics HAL and CMSIS
+--------------------------------
+Everything under `target/Drivers/` is generated or supplied by
+STMicroelectronics and is covered by the licence files distributed with
+it, including `target/Drivers/CMSIS/Device/ST/STM32F4xx/LICENSE.txt`.
+The CubeMX-generated sources under `target/Core/` and
+`target/startup_stm32f411xe.s` carry ST's licence terms in their own
+headers.
