@@ -673,7 +673,7 @@ absence of unexpected growth.
 That embedded claim is now measured rather than argued. Cross-compiled for
 Cortex-M4 at `-O3`, the transform code occupies 4 468 bytes of flash for
 `fft.c`, 21 704 for `fpr.c` — almost all of it the constant tables — and
-2 400 for `myfft.c`, against the F411's 512 KB. A Falcon-512 multiply needs
+2 672 for `myfft.c`, against the F411's 512 KB. A Falcon-512 multiply needs
 two 4 KB operand buffers of its 128 KB SRAM. The verification and benchmark
 firmware is far larger than any of this, because it carries all three builds,
 the frozen known-answer vectors, and a 32 KB heap for `myfft.c`'s twiddle

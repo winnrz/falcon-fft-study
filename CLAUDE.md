@@ -291,7 +291,8 @@ clang -O2 -o gen_kat tools/gen_kat.c
 ```
 
 The linker script's `_Min_Heap_Size` is raised from the generated `0x200` to
-`0x4000` for `myfft.c`'s twiddle tables. Like the Makefile, the linker script
+`0x8000` for `myfft.c`'s twiddle tables, which need 24 560 bytes across
+`logn` 1-10 and so will not fit in `0x4000`. Like the Makefile, the linker script
 is CubeMX-generated and this change must be re-applied after regeneration.
 
 `target/Makefile` carries a block marked **"study additions -- RE-APPLY AFTER
