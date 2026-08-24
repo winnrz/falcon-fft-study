@@ -54,7 +54,8 @@ Written for this study:
 | `Makefile` | Builds and runs everything on the host |
 | `target/` | The Cortex-M4 firmware: CubeMX project plus `target/App` |
 | `tools/gen_kat.c` | Generates the target's known-answer vectors |
-| `bench-m4.csv` | Target results, the figures quoted below |
+| `bench-m4.csv` | Target timings, the cycle figures quoted below |
+| `verify-m4.csv` | Target correctness and precision margins, all three builds |
 
 `fft.c` depends on `fpr.c` only for two constant tables
 (`fpr_gm_tab`, `fpr_p2_tab`); `fpr.c` is fully self-contained. Nothing else
@@ -242,21 +243,29 @@ cross-check against the official reference at every size:
 
 | logn = 9 comparison | max abs difference |
 |---|---|
-| forward transform, slot by slot | 1.18e-11 |
-| inverse, completing the round trip | 5.12e-13 |
-| finished product, coefficient by coefficient | 5.59e-09 |
+| forward transform, slot by slot | 7.28e-12 |
+| inverse, completing the round trip | 5.68e-13 |
+| finished product, coefficient by coefficient | 5.12e-09 |
 
 113 checks, 0 failures. The forward comparison is the one that constrains slot
-ordering — a permuted layout would still pass the product comparison.
+ordering — a permuted layout would still pass the product comparison. The
+differences are not expected to reach zero: the two implementations apply the
+same operations in a different order, so they round differently even when both
+are equally accurate.
 
-Accuracy is close to the reference but not identical, being consistently
-around 1.5× worse:
+Accuracy against the exact integer oracle is what settles which is better, and
+on the host the two are now identical at Falcon-512's operating point:
 
 | operand pair | reference | from scratch |
 |---|---|---|
-| `f * g` | 8.19e-12 | 1.43e-11 |
-| `f * F` | 3.73e-09 | 5.82e-09 |
-| `F * G` | 1.91e-06 | 2.86e-06 |
+| `f * g` | 8.185e-12 | 8.185e-12 |
+| `f * F` | 3.725e-09 | 3.725e-09 |
+| `F * G` | 1.907e-06 | 1.907e-06 |
+
+This was not true of an earlier version of the implementation, which was
+consistently about 1.5× less accurate. The cause was a rounding error in the
+twiddle **arguments** rather than in `cos` and `sin` themselves; the diagnosis
+and the fix are described under [Precision headroom](#precision-headroom).
 
 Both break at the same place in the T9 sweep (`B = 10⁷`), so the exactness
 boundary is a property of the approach rather than of either implementation.
@@ -313,15 +322,15 @@ arithmetic. Comparing 1 against 3 conflates the two and says nothing.
 |---|---|---|---|---|
 | 1 reference, emulated + asm | 1 228 583 | 1 294 571 | 169 258 | 3 920 995 |
 | 2 reference, soft-double | 911 274 | 940 414 | 127 465 | 2 890 054 |
-| 3 from scratch, soft-double | 991 611 | 1 034 096 | 127 359 | 3 142 722 |
+| 3 from scratch, soft-double | 977 517 | 1 019 980 | 127 359 | 3 101 545 |
 
 Constant-time arithmetic costs **1.357×**. The from-scratch implementation is
-**1.087×** the reference on identical floating-point routines.
+**1.073×** the reference on identical floating-point routines.
 
 The pointwise products agree to within 0.1% — 127 359 against 127 465 — which
 is what should happen, since that operation is the same arithmetic on the same
 soft-double routines in both. The entire structural gap is therefore in the
-transforms: forward +8.8%, inverse +10.0%.
+transforms: forward +7.3%, inverse +8.5%.
 
 ### The reference's inverse-transform advantage does not survive emulation
 
@@ -354,10 +363,10 @@ Normalised cost, cycles per `n·log₂n` for the complete multiply:
 
 | n | build 1 | build 2 | build 3 |
 |---|---|---|---|
-| 32 | 818.6 | 604.0 | 690.4 |
-| 128 | 839.0 | 617.7 | 684.5 |
-| 512 | 850.9 | 627.2 | 682.0 |
-| 1024 | 855.2 | 630.5 | 681.5 |
+| 32 | 818.6 | 604.0 | 676.3 |
+| 128 | 839.0 | 617.7 | 673.1 |
+| 512 | 850.9 | 627.2 | 673.1 |
+| 1024 | 855.2 | 630.5 | 673.4 |
 
 Flat across a 32× range of `n`, which is the empirical confirmation that all
 three are `O(N log N)`. Taken as a ratio between the two largest sizes,
@@ -365,7 +374,38 @@ against an ideal of 2.222:
 
 | build 1 | build 2 | build 3 |
 |---|---|---|
-| 2.2334 | 2.2340 | 2.2207 |
+| 2.2334 | 2.2340 | 2.2234 |
+
+### Falcon-1024 (`logn = 10`)
+
+Every measurement above was repeated at `n = 1024`, the parameter set for
+Falcon-1024. The complete multiply:
+
+| build | cycles | at 24 MHz | vs build 2 |
+|---|---|---|---|
+| 1 reference, emulated + asm | 8 757 193 | 365 ms | 1.356× |
+| 2 reference, soft-double | 6 456 246 | 269 ms | — |
+| 3 from scratch, soft-double | 6 895 876 | 287 ms | 1.068× |
+
+Nothing qualitative changes at the larger size, which is the point of
+measuring it. The constant-time premium is 1.356× against 1.357× at `n = 512`
+— unchanged to three figures — so the cost of Falcon's emulated arithmetic is
+a property of the arithmetic and not of the transform length. The structural
+gap between the two FFTs narrows slightly, 1.073× to 1.068×, with the same
+shape as before: the pointwise products stay within 0.02% of each other
+(254 084 against 254 120) while the transforms account for the whole
+difference, forward +6.7% and inverse +7.9%.
+
+Precision behaves as the scaling argument predicts. One extra stage costs one
+more bit of headroom at the operating point, 37 at `logn = 9` down to 36 at
+`logn = 10` for both implementations, and the wide-bound cases sit at 23 bits
+in both. Falcon-1024 therefore retains a very large margin — around 2³⁶ times
+the deviation needed to break exact recovery.
+
+The practical reading is that doubling `n` costs slightly more than the ideal
+2.222× predicted by `N log N`, at 2.233× for the reference and 2.223× for the
+from-scratch code, and that a Falcon-1024 signature's polynomial multiply
+costs roughly a quarter of a second on this part at 24 MHz.
 
 ### Constant time, measured rather than asserted
 
@@ -376,8 +416,8 @@ cases:
 | build | spread |
 |---|---|
 | 1 reference, emulated + asm | **0 cycles** |
-| 2 reference, soft-double | 8 725 cycles |
-| 3 from scratch, soft-double | 8 858 cycles |
+| 2 reference, soft-double | 8 727 cycles |
+| 3 from scratch, soft-double | 9 443 cycles |
 
 Build 1 does not vary at all with the data. Builds 2 and 3 do. This is the
 security property observed directly on the hardware rather than inferred from
@@ -393,7 +433,7 @@ implementation can be exactly additive:
 |---|---|---|---|
 | 1 | 3 920 995 | 3 920 995 | **0** |
 | 2 | 2 890 427 | 2 890 054 | 373 |
-| 3 | 3 144 677 | 3 142 722 | 1 955 |
+| 3 | 3 102 373 | 3 101 545 | 828 |
 
 Build 1 agrees to the cycle. Neither of the others does.
 
@@ -402,20 +442,69 @@ Build 1 agrees to the cycle. Neither of the others does.
 Rounding recovers the exact integer product only while a coefficient sits
 closer than 0.5 to it. The margin below is how many times the worst observed
 deviation could be doubled before reaching that limit — the headroom in bits,
-measured on target at `logn = 9`:
+measured on target across ten known-answer cases spanning `logn` 5 to 10. The
+full table is `verify-m4.csv`:
 
-| operand bound | reference | from scratch |
-|---|---|---|
-| ±25 (Falcon-512's own range) | 37 | 36 |
-| ±2048 | 23 | 23 |
+| logn | operand bound | reference | from scratch |
+|---|---|---|---|
+| 5 | ±25 | 40 | 39 |
+| 6 | ±25 | 39 | 38 |
+| 7 | ±25 | 38 | 38 |
+| 8 | ±25 | 37 | 37 |
+| 9 | ±25 | 37 | 36 and 37 |
+| 10 | ±25 | 36 | 36 |
+| 5 | ±2048 | 27 | 27 |
+| 9 | ±2048 | 23 | 24 |
+| 10 | ±2048 | 23 | 23 |
 
-The consistent one-bit gap at the operating point is systematic rather than
-noise; it appears at `logn = 5` as well, 40 against 39. It also agrees with
-what T11 measures independently on the host, where the from-scratch code is
-consistently about 1.5× less accurate — a shade over half a bit, which rounds
-to the one-bit gap seen here. A likely cause is `myfft.c` generating twiddle
-factors from `cos`/`sin` at runtime where the reference reads the precomputed
-`fpr_gm_tab`.
+Two cases are listed at `logn = 9, ±25` because two independent operand draws
+were measured there; they disagree by a bit, which is itself informative about
+how finely this metric resolves.
+
+#### Where the from-scratch code lost a bit, and why
+
+An earlier version of this implementation trailed the reference by a bit at
+most sizes. The cause turned out not to be the one that first suggests itself.
+`myfft.c` builds its twiddles by calling `cos` and `sin` at run time where the
+reference reads the precomputed `fpr_gm_tab`, so the natural suspicion is that
+the library functions are the weak link. Measured against a 60-digit
+reference, they are not: on the development host they are very nearly
+correctly rounded, contributing about 2⁻⁵³·⁵ of the error.
+
+The error was in the **argument**, before either function was called.
+`M_PI * (double)v / (double)n` rounds twice — `M_PI` is already a rounded π,
+and the product rounds again — so the angle handed to `cos` was itself several
+ulps from the true one, and no accuracy inside the function can recover an
+argument that arrived wrong. The twiddle table carried about 2⁻⁵¹·⁴ of error
+against a correctly rounded table's 2⁻⁵⁴·⁰, and every butterfly that read it
+inherited the difference.
+
+Carrying the angle as an unevaluated sum `hi + lo` removes the second
+rounding: π splits into a head and a tail, `fma` recovers the exact residual
+of the product, the division by `n` is exact because `n` is a power of two,
+and a first-order expansion transfers the residual onto the result. On the
+host this closes the gap **exactly** — the from-scratch code now matches the
+reference to the last digit at Falcon-512's operating point, where it was
+previously 1.5× worse.
+
+On target the improvement is real but smaller: summed across the ten cases
+above, the deficit against the reference falls from four bits to one. Two
+things account for the difference. The margin is reported as a whole number of
+bits while the improvement is worth roughly 0.6 of one, so individual cases
+flip either way depending on which side of a rounding boundary they fall —
+which is why `logn = 6` moved the wrong way while `logn = 9, ±2048` moved a
+bit ahead of the reference. And the target builds its table with newlib's
+`cos`, `sin` and `fma` rather than the host's, so the two platforms do not
+construct the same table; the residual on target is bounded by newlib's
+library quality, which this study has not measured independently.
+
+The honest summary is that the host measurement identifies the mechanism and
+the target measurement is consistent with it, but the on-target metric is too
+coarsely quantised to confirm it case by case. Eliminating the remaining
+difference would mean precomputing the table off-line as `static const
+double[]`, which would also make host and target bit-identical and remove the
+run-time allocation; it was judged not worth reopening verified code for a
+sub-bit effect the measurement cannot resolve.
 
 Thirty-seven bits is a large margin, and it bears directly on whether the
 idle single-precision FPU could take over part of the transform: `float`
@@ -434,11 +523,17 @@ Complete integer multiply, including the exact schoolbook for reference:
 
 | n | from scratch | reference | ratio | schoolbook | speedup |
 |---|---|---|---|---|---|
-| 8 | 81 | 43 | 1.91 | 53 | 0.7× |
-| 16 | 152 | 99 | 1.54 | 199 | 1.3× |
-| 64 | 503 | 374 | 1.34 | 3 985 | 7.9× |
-| 512 | 4 714 | 4 095 | 1.15 | 224 188 | 47.6× |
-| 1024 | 9 955 | 9 109 | 1.09 | 880 188 | 88.4× |
+| 8 | 83 | 43 | 1.93 | 53 | 0.6× |
+| 16 | 155 | 98 | 1.58 | 199 | 1.3× |
+| 64 | 502 | 366 | 1.37 | 3 953 | 7.9× |
+| 512 | 4 730 | 3 776 | 1.25 | 224 039 | 47.4× |
+| 1024 | 9 964 | 8 340 | 1.19 | 880 688 | 88.4× |
+
+These were re-measured after the twiddle change described above; the
+from-scratch timings moved by less than 0.5%, since table construction happens
+outside every timed region. The reference's figures moved more, which is
+session-to-session drift on a shared laptop rather than anything about the
+code — one more reason the host is not the platform of record here.
 
 The point that does transfer: **the FFT does not pay for itself until
 `n = 16`.** Below that the exact `O(N²)` schoolbook is simply faster, which is

@@ -89,6 +89,12 @@ schoolbook_mul(const int64_t *a, const int64_t *b, __int128 *c, size_t n)
  * the scheme's real operating point.  The wider bound exercises the
  * transform further from it without leaving the range where the exact
  * product is still recoverable by rounding.
+ *
+ * The sweep over logn matters as much as the bounds.  A precision claim
+ * resting on one or two sizes cannot distinguish a systematic effect
+ * from a lucky draw at that size; covering 5 through 10 lets the trend
+ * in the margin be read directly, and puts Falcon-1024's logn = 10 on
+ * the same footing as Falcon-512's logn = 9.
  */
 static const struct {
 	unsigned logn;
@@ -97,9 +103,14 @@ static const struct {
 } cases[] = {
 	{ 5, 25,   0xA1B2C3D4E5F60718ULL },
 	{ 5, 2048, 0x0F1E2D3C4B5A6978ULL },
+	{ 6, 25,   0x2468ACE013579BDFULL },
+	{ 7, 25,   0x13579BDF2468ACE0ULL },
+	{ 8, 25,   0x9E3779B97F4A7C15ULL },
 	{ 9, 25,   0x123456789ABCDEF0ULL },
 	{ 9, 25,   0x0FEDCBA987654321ULL },
 	{ 9, 2048, 0x5555AAAA3333CCCCULL },
+	{ 10, 25,   0xC2B2AE3D27D4EB4FULL },
+	{ 10, 2048, 0x165667B19E3779F9ULL },
 };
 
 #define NCASES  ((int)(sizeof cases / sizeof cases[0]))

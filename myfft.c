@@ -150,6 +150,50 @@ struct twiddle_tab {
 
 static struct twiddle_tab tabs[MYFFT_MAX_LOGN + 1];
 
+/*
+ * cos and sin of pi*k/d, for d a power of two.
+ *
+ * Forming the angle as M_PI * k / d looks harmless and is not.  M_PI is
+ * a rounded pi to begin with, and the product rounds again, so the angle
+ * handed to libm is already several ulps from the true one.  cos and sin
+ * are very nearly correctly rounded, but no accuracy inside the function
+ * recovers an argument that arrived wrong: the error lands in the table
+ * and from there feeds every butterfly that reads it.
+ *
+ * Carrying the angle as an unevaluated sum hi + lo removes that.  pi
+ * splits into PI_HI + PI_LO; fma recovers the exact residual of the
+ * product PI_HI * k; the division by d is exact because d is a power of
+ * two.  A first-order expansion then transfers the residual onto the
+ * result,
+ *
+ *     cos(hi + lo) = cos hi - lo * sin hi + O(lo^2)
+ *     sin(hi + lo) = sin hi + lo * cos hi + O(lo^2)
+ *
+ * and with lo below 2^-50 the quadratic term stays far under one ulp.
+ */
+#define MY_PI_HI   3.141592653589793115997963468544185161590576171875
+#define MY_PI_LO   1.2246467991473531772e-16
+
+static void
+cos_sin_pi(size_t k, size_t d, double *c, double *s)
+{
+	double p_hi, p_lo, a_hi, a_lo, ch, sh;
+
+	/* Exact product PI_HI * k, as the pair (p_hi, p_lo). */
+	p_hi = MY_PI_HI * (double)k;
+	p_lo = fma(MY_PI_HI, (double)k, -p_hi);
+
+	/* Fold in pi's own tail, then scale.  Both divisions are exact. */
+	p_lo += MY_PI_LO * (double)k;
+	a_hi = p_hi / (double)d;
+	a_lo = p_lo / (double)d;
+
+	ch = cos(a_hi);
+	sh = sin(a_hi);
+	*c = ch - sh * a_lo;
+	*s = sh + ch * a_lo;
+}
+
 int
 my_fft_init(unsigned logn)
 {
@@ -183,22 +227,19 @@ my_fft_init(unsigned logn)
 	t->bytes = (2 * hn + 2 * (hw ? hw : 1)) * sizeof(double);
 
 	/*
-	 * The twist.  Computing each angle from scratch rather than by
-	 * repeated multiplication keeps the table accurate to within one
-	 * ulp of the true value; iterating zeta^v = zeta^(v-1) * zeta
-	 * would accumulate error across hn steps.
+	 * The twist.  Each angle is computed from scratch rather than by
+	 * repeated multiplication: iterating zeta^v = zeta^(v-1) * zeta
+	 * would accumulate error across hn steps.  Avoiding that is
+	 * necessary but not sufficient -- see cos_sin_pi above for the
+	 * second error source, which is the angle itself.
 	 */
 	for (v = 0; v < hn; v++) {
-		double ang = M_PI * (double)v / (double)n;
-		t->tw_re[v] = cos(ang);
-		t->tw_im[v] = sin(ang);
+		cos_sin_pi(v, n, &t->tw_re[v], &t->tw_im[v]);
 	}
 
 	/* The DFT twiddles, positive exponent to match omega above. */
 	for (m = 0; m < hw; m++) {
-		double ang = 2.0 * M_PI * (double)m / (double)hn;
-		t->w_re[m] = cos(ang);
-		t->w_im[m] = sin(ang);
+		cos_sin_pi(2 * m, hn, &t->w_re[m], &t->w_im[m]);
 	}
 
 	t->ready = 1;

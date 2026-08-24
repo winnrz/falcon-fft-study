@@ -14,8 +14,9 @@ reference (`fft.c`, `fpr.c`), for both correctness and cost.
 
 **Target platform: STM32F411 (Cortex-M4F).** The x86-64 / Ubuntu / GCC
 baseline named in the signed proposal was dropped deliberately in August 2026
-after a supervisor meeting. Do not propose reinstating it. Note the signed
-proposal still says Ubuntu/GCC, so a proposal amendment may be outstanding.
+after a supervisor meeting. Do not propose reinstating it. The signed
+proposal still names Ubuntu/GCC, but the supervisor is aware of the pivot and
+no amendment is being pursued — do not raise it as an open item.
 
 Host builds remain useful for fast verification during development, but the
 Cortex-M4F is the platform of record for every benchmark number.
@@ -30,6 +31,8 @@ Cortex-M4F is the platform of record for every benchmark number.
 | `test_myfft.c` | verifies `myfft.c` (T1–T10) plus T11, a slot-by-slot cross-check against the reference |
 | `bench_fftmul.c` | timing, host only so far |
 | `measure_memory.sh` | peak RSS, massif, leak check |
+| `bench-m4.csv` | target timings, `logn` 1-10, all three builds |
+| `verify-m4.csv` | target correctness and precision margins, 10 KAT cases |
 
 ## Conventions
 
@@ -71,7 +74,7 @@ Core flags:
 
 All three FFT sources cross-compile clean with zero warnings under
 `-Wall -Wextra -Wshadow -Wundef`. Sizes at `-O3`: `fft.o` 4468 B text,
-`fpr.o` 21704 B, `myfft.o` 2400 B text + 312 B bss. Comfortable against the
+`fpr.o` 21704 B, `myfft.o` 2672 B text + 312 B bss. Comfortable against the
 F411's 512 KB flash / 128 KB SRAM.
 
 ### The float backend gotcha
@@ -151,18 +154,22 @@ Falcon-512's operating point (`logn = 9`, `|coeff| <= 25`, n = 512 multiply):
 
 | build | cycles | vs build 2 | time spread over cases |
 |---|---|---|---|
-| 1 reference, FPEMU + M4 asm | 3 920 996 | 1.35x | **0 cycles** |
-| 2 reference, libgcc soft-double | 2 890 743 | — | 8 725 cycles |
-| 3 `myfft.c`, libgcc soft-double | 3 142 004 | 1.08x | 8 858 cycles |
+| 1 reference, FPEMU + M4 asm | 3 920 995 | 1.36x | **0 cycles** |
+| 2 reference, libgcc soft-double | 2 890 054 | — | 8 727 cycles |
+| 3 `myfft.c`, libgcc soft-double | 3 101 545 | 1.07x | 9 443 cycles |
 
-Constant-time arithmetic costs 1.35x; the from-scratch FFT is 8% behind the
+Constant-time arithmetic costs 1.36x; the from-scratch FFT is 7% behind the
 reference on identical float routines. The spread column measures the
 constant-time property directly — those cases differ only in operand values.
 
+Run-to-run noise on these figures is +/-1 cycle, so differences of a few
+hundred are real. Full tables: `bench-m4.csv` (timings) and `verify-m4.csv`
+(correctness and precision margins), both captured from the firmware that is
+currently on the board.
+
 Precision headroom is 37 bits for the reference at the operating point and
-36 for `myfft.c`. The 1-bit gap is consistent across sizes, so it is
-systematic; a likely cause is `myfft.c` generating twiddles from `cos`/`sin`
-at runtime where the reference reads `fpr_gm_tab`.
+36-37 for `myfft.c`, over ten KAT cases spanning `logn` 5-10. See the twiddle
+note below for why the two are no longer cleanly separated.
 
 ### What is done
 
@@ -175,6 +182,25 @@ at runtime where the reference reads `fpr_gm_tab`.
   retained but explicitly labelled as not the result.
 - Comparison against Pornin (ePrint 2025/123) and pqm4 written up, with
   sources and a pinned pqm4 snapshot in `refs/`.
+- **The `myfft.c` precision gap is diagnosed and fixed.** The cause was not
+  `cos`/`sin` — measured against a 60-digit reference those are very nearly
+  correctly rounded. It was the *argument*: `M_PI * v / n` rounds twice, so
+  the angle reaching libm was already several ulps out, and the table
+  carried 2^-51.4 of error against a correctly rounded 2^-54.0.
+  `cos_sin_pi` in `myfft.c` now carries the angle as an unevaluated
+  `hi + lo` pair (pi split into head and tail, `fma` for the exact product
+  residual, exact division by the power-of-two `n`, first-order expansion
+  onto the result). On the host this closes the gap exactly — `myfft.c` now
+  matches the reference to the last digit at the operating point. On target
+  the summed deficit over ten cases falls from 4 bits to 1; it does not
+  vanish because the margin is quantised to whole bits while the improvement
+  is worth ~0.6, and because the target builds its table with newlib's
+  `cos`/`sin`/`fma` rather than the host's, so the two platforms do not
+  construct the same table.
+- KAT coverage extended from 5 cases at two sizes to 10 spanning `logn` 5-10,
+  so the precision trend can be read rather than inferred from two points.
+- `verify-m4.csv` captured, so the precision claim has an artefact behind it
+  the way the timings always did.
 
 ### Outstanding
 
@@ -186,25 +212,36 @@ at runtime where the reference reads `fpr_gm_tab`.
    serve for the **polynomial multiply alone**, inside an implementation
    keeping binary64 for the Gaussian sampling and LDL tree, which this study
    does not measure. See `refs/README.md` for the quotation.
-2. **The proposal amendment.** The signed proposal still says x86-64 /
-   Ubuntu / GCC. Worth raising together with the narrow SP question, so
-   there is one scope conversation rather than two.
-3. **The one-bit precision gap in `myfft.c`.** Systematic, not noise: 36 bits
-   against the reference's 37 at the operating point, 39 against 40 at
-   `logn = 5`, and it agrees with T11's independent host finding of ~1.5×
-   worse accuracy. Testable hypothesis: `myfft.c` builds twiddles from
-   `cos`/`sin` at runtime where the reference reads `fpr_gm_tab`. Generating
-   the tables the reference's way and re-measuring would settle it, and
-   would also be the first step toward moving them into flash.
-4. **`logn = 10` is measured but not discussed.** `bench-m4.csv` covers
-   Falcon-1024; the README only analyses `n = 512`.
+2. **Optional: precompute the twiddles as `static const double[]`.**
+   Deliberately not done. It would make host and target construct
+   bit-identical tables, remove the last dependence on newlib's libm, and
+   remove `my_fft_init`'s `malloc` along with the `_Min_Heap_Size` linker
+   edit that has to be re-applied after every CubeMX regeneration. The cost
+   is ~96 KB of flash at `MYFFT_MAX_LOGN = 12` and reopening code that is
+   currently verified and working, to chase a sub-bit effect the on-target
+   metric cannot resolve. Judged not worth it; recorded so the reasoning is
+   not lost.
+
+The proposal amendment is **not** outstanding: the supervisor is aware of the
+Cortex-M4 pivot and no amendment is being pursued. Do not re-raise it.
 
 ### Where things physically stand
 
-The board currently holds the verification-plus-benchmark firmware: it runs
-the KAT check and the full sweep on a loop, reporting over USART2. Reading it
-back needs no rebuild, only a reader attached to `/dev/cu.usbmodem*` at
-115200 — or `st-flash reset` to restart the cycle.
+The board currently holds the verification-plus-benchmark firmware built from
+the current tree — ten KAT cases, the fixed twiddles: it runs the KAT check and
+the full sweep on a loop, reporting over USART2. Reading it back needs no
+rebuild, only a reader attached to `/dev/cu.usbmodem*` at 115200 — or
+`st-flash reset` to restart the cycle.
+
+macOS resets the port's termios when the last descriptor closes, so a plain
+`stty -f ... 115200` followed by `cat` reads garbage: the settings are gone
+before `cat` opens the device. Set the line discipline on the same descriptor
+you then read from (`termios.tcsetattr` in a short Python script works).
+
+Everything the write-up needs is already captured in `bench-m4.csv` and
+`verify-m4.csv`, and the per-build object sizes come from
+`arm-none-eabi-size`, so the board is not needed again unless a new figure is
+wanted.
 
 ## The `target/` project
 
@@ -304,8 +341,3 @@ overhead 1 cycle, `busy(2n)/busy(n)` = 1.999, and `HAL_Delay(100)` measured at
 adds a tick of margin and starts mid-tick, so it waits 100-101 ms; the result
 is consistent with the clock being exactly 24.000 MHz.
 
-## Stale documentation
-
-`README.md`'s "Platform note" section still describes arm64/clang host results
-and lists x86-64 Ubuntu re-runs as outstanding work. That section predates the
-Cortex-M4 pivot and needs rewriting once on-target numbers exist.
